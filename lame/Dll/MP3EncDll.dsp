@@ -92,14 +92,6 @@ LINK32=xilink.exe
 # Name "MP3EncDll - Win32 Debug"
 # Begin Source File
 
-SOURCE=..\bitstream.c
-# End Source File
-# Begin Source File
-
-SOURCE=..\bitstream.h
-# End Source File
-# Begin Source File
-
 SOURCE=.\BladeMP3EncDLL.c
 # End Source File
 # Begin Source File
