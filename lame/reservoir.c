@@ -19,7 +19,7 @@
 #ifdef HAVEGTK
 #include "gtkanal.h"
 #endif
-#include "lame.h"
+
 
 /*
   Layer3 bit reservoir:
@@ -38,16 +38,15 @@ static int ResvMax  = 0; /* in bits */
 int
 ResvFrameBegin(lame_global_flags *gfp,III_side_info_t *l3_side, int mean_bits, int frameLength )
 {
-  lame_internal_flags *gfc=gfp->internal_flags;
     int fullFrameBits;
     int resvLimit;
 
-    if (gfc->frameNum==0) {
+    if (gfp->frameNum==0) {
       ResvSize=0;
     }
 
 
-    if ( gfc->version == 1 )
+    if ( gfp->version == 1 )
     {
 	resvLimit = 4088; /* main_data_begin has 9 bits in MPEG 1 */
     }
@@ -67,7 +66,7 @@ ResvFrameBegin(lame_global_flags *gfp,III_side_info_t *l3_side, int mean_bits, i
 #endif
     /* check expected resvsize */
     assert( (l3_side->main_data_begin * 8) == ResvSize );
-    fullFrameBits = mean_bits * gfc->mode_gr + ResvSize;
+    fullFrameBits = mean_bits * gfp->mode_gr + ResvSize;
 
     /*
       determine maximum size of reservoir:
@@ -139,8 +138,7 @@ void ResvMaxBits(int mean_bits, int *targ_bits, int *extra_bits, int gr)
 void
 ResvAdjust(lame_global_flags *gfp,gr_info *gi, III_side_info_t *l3_side, int mean_bits )
 {
-  lame_internal_flags *gfc=gfp->internal_flags;
-  ResvSize += (mean_bits / gfc->stereo) - gi->part2_3_length;
+    ResvSize += (mean_bits / gfp->stereo) - gi->part2_3_length;
 }
 
 
@@ -157,11 +155,9 @@ ResvFrameEnd(lame_global_flags *gfp,III_side_info_t *l3_side, int mean_bits)
 {
     int stuffingBits;
     int over_bits;
-    lame_internal_flags *gfc=gfp->internal_flags;
-
 
     /* just in case mean_bits is odd, this is necessary... */
-    if ( gfc->stereo == 2 && mean_bits & 1)
+    if ( gfp->stereo == 2 && mean_bits & 1)
 	ResvSize += 1;
 
     over_bits = ResvSize - ResvMax;

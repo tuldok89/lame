@@ -152,54 +152,30 @@ FLOAT8 find_scalefac(FLOAT8 *xr,FLOAT8 *xr34,int stride,int sfb,
     ol_sf -= 2*cod_info->subblock_gain[i];
     ol_sf -= ifqstep*scalefac[gr][ch].s[sfb][i];
 */
-FLOAT8 compute_scalefacs_short(FLOAT8 vbrsf[SBPSY_s][3],gr_info *cod_info,
-int scalefac[SBPSY_s][3],int sbg[3])
+FLOAT8 compute_scalefacs_short(FLOAT8 vbrsf[SBPSY_s][3],gr_info *cod_info,int scalefac[SBPSY_s][3])
 {
-  FLOAT8 maxrange,maxrange1,maxrange2,maxover;
+  FLOAT8 maxrange,maxover;
   FLOAT8 sf[SBPSY_s][3];
   int sfb,i;
   int ifqstep_inv = ( cod_info->scalefac_scale == 0 ) ? 2 : 1;
 
   /* make a working copy of the desired scalefacs */
-  memcpy(sf,vbrsf,sizeof(sf));
+  memcpy(sf,vbrsf,SBPSY_s*3*sizeof(FLOAT8));
+
+  /* see if we should use subblock gain */
+
 
   maxover=0;
-  maxrange1 = 15.0/ifqstep_inv;
-  maxrange2 = 7.0/ifqstep_inv;
-  for (i=0; i<3; ++i) {
-    FLOAT8 maxsf1=0,maxsf2=0;
-    sbg[i]=0;
-    /* see if we should use subblock gain */
-    for ( sfb = 0; sfb < SBPSY_s; sfb++ ) {
-      if (sfb < 6) {
-	if (-sf[sfb][i]>maxsf1) maxsf1 = -sf[sfb][i];
-      } else {
-	if (-sf[sfb][i]>maxsf2) maxsf2 = -sf[sfb][i];
-      }
-    }
-
-    /* boost subblock gain as little as possible so we can
-     * reach maxsf1 with scalefactors */
-    maxsf1 = Max(maxsf1-maxrange1,maxsf2-maxrange2);
-    if (maxsf1 > 0) {
-      sbg[i]  = floor(maxsf1/2 + .001);
-      if (sbg[i] + cod_info->subblock_gain[i] > 7)
-	sbg[i] = 7-cod_info->subblock_gain[i];
-      assert(sbg[i]+cod_info->subblock_gain[i] <= 7);
-    }
-
-    for ( sfb = 0; sfb < SBPSY_s; sfb++ ) {
+  for ( sfb = 0; sfb < SBPSY_s; sfb++ ) {
+    for (i=0; i<3; ++i) {
       /* ifqstep*scalefac + 2*subblock_gain >= -sf[sfb] */
-      /* sf * ifqstep_inv = 3.0       scalefac=3.0 */
-      /* sf * ifqstep_inv = 3.25-4.0  scalefac=4.0 */
-      scalefac[sfb][i]=floor( -sf[sfb][i]*ifqstep_inv -2*sbg[i] +.75 + .0001);
+      scalefac[sfb][i]=floor( -sf[sfb][i]*ifqstep_inv  +.75 + .0001)   ;
       
-      maxrange = (sfb<6) ? maxrange1 : maxrange2;
+      if (sfb < 6) maxrange = 15.0/ifqstep_inv;
+      else maxrange = 7.0/ifqstep_inv;
+      
       if (maxrange + sf[sfb][i] > maxover) maxover = maxrange+sf[sfb][i];
-
-      if (scalefac[sfb][i] > maxrange) scalefac[sfb][i]=maxrange;
     }
-
   }
   return maxover;
 }
@@ -239,17 +215,13 @@ FLOAT8 compute_scalefacs_long(FLOAT8 vbrsf[SBPSY_l],gr_info *cod_info,int scalef
 
   maxover=0;
   for ( sfb = 0; sfb < SBPSY_l; sfb++ ) {
+    /* ifqstep*scalefac >= -sf[sfb] */
+    scalefac[sfb]=floor( -sf[sfb]*ifqstep_inv  +.75 + .0001)   ;
+
     if (sfb < 11) maxrange = 15.0/ifqstep_inv;
     else maxrange = 7.0/ifqstep_inv;
 
-    /* ifqstep*scalefac >= -sf[sfb] */
-    scalefac[sfb]=floor( -sf[sfb]*ifqstep_inv  +.75 + .0001)   ;
-    if (scalefac[sfb] > maxrange) scalefac[sfb]=maxrange;
-    sf[sfb] += (FLOAT8)scalefac[sfb]/(FLOAT8)ifqstep_inv;
-
-    /* sf[sfb] should now be positive: */
-    if (-sf[sfb] > maxover) maxover = -sf[sfb];
-
+    if (maxrange + sf[sfb] > maxover) maxover = maxrange+sf[sfb];
   }
   return maxover;
 }
@@ -268,18 +240,16 @@ void
 VBR_iteration_loop_new (lame_global_flags *gfp,
                 FLOAT8 pe[2][2], FLOAT8 ms_ener_ratio[2],
                 FLOAT8 xr[2][2][576], III_psy_ratio ratio[2][2],
-                int l3_enc[2][2][576],
+                III_side_info_t * l3_side, int l3_enc[2][2][576],
                 III_scalefac_t scalefac[2][2])
 {
-  lame_internal_flags *gfc=gfp->internal_flags;
   III_psy_xmin l3_xmin[2][2];
   FLOAT8    masking_lower_db;
+  FLOAT8    ifqstep;
   int       start,end,bw,sfb, i,ch, gr, over;
   III_psy_xmin vbrsf;
-  FLOAT8 maxover,vbrmax;
-  III_side_info_t * l3_side;
-  
-  l3_side = &gfc->l3_side;
+  FLOAT8 vbrmax;
+
 
   iteration_init(gfp,l3_side,l3_enc);
 
@@ -291,10 +261,10 @@ VBR_iteration_loop_new (lame_global_flags *gfp,
   masking_lower = 1;
 
 
-  for (gr = 0; gr < gfc->mode_gr; gr++) {
+  for (gr = 0; gr < gfp->mode_gr; gr++) {
     if (convert_mdct)
       ms_convert(xr[gr],xr[gr]);
-    for (ch = 0; ch < gfc->stereo; ch++) { 
+    for (ch = 0; ch < gfp->stereo; ch++) { 
       FLOAT8 xr34[576];
       gr_info *cod_info = &l3_side->gr[gr].ch[ch].tt;
       int shortblock;
@@ -330,79 +300,37 @@ VBR_iteration_loop_new (lame_global_flags *gfp,
 	  if (vbrsf.l[sfb]>vbrmax) vbrmax = vbrsf.l[sfb];
 	}
 
-      } /* compute needed scalefactors */
-
-
+      } /* compute scalefactors */
 
       /* sf =  (cod_info->global_gain-210.0)/4.0; */
       cod_info->global_gain = floor(4*vbrmax +210 + .5);
 
+
       if (shortblock) {
-	/******************************************************************
-	 *
-	 *  short block scalefacs
-	 *
-	 ******************************************************************/
-	int sbg[3];
 	for ( sfb = 0; sfb < SBPSY_s; sfb++ ) {
 	  for ( i = 0; i < 3; i++ ) {
 	    vbrsf.s[sfb][i] -= vbrmax;
 	  }
 	}
 	cod_info->scalefac_scale = 0;
-
-	/* first see if we should turn on subblock gain.
-	 * does not depend on scalefac_scale */
-	for (i=0; i<3; ++i) {
-	  FLOAT8 minsf=1000;
-	  for ( sfb = 0; sfb < SBPSY_s; sfb++ ) {
-	    if (-vbrsf.s[sfb][i]<minsf) minsf = -vbrsf.s[sfb][i];
-	  }
-	  /* minsf = 0-1.75: no subblock gain
-	   * minsf = 2-3.75: subblock gain = 1
-           * minsf = 4-5.76: subblock_gain = 2  etc.... */
-	  assert(minsf >= 0);
-	  cod_info->subblock_gain[i] = floor(minsf/2 + .001);
-	  if (cod_info->subblock_gain[i] > 7)
-	    cod_info->subblock_gain[i]=7;
-	  for ( sfb = 0; sfb < SBPSY_s; sfb++ ) {
-	    vbrsf.s[sfb][i] += 2*cod_info->subblock_gain[i];
-	    assert(vbrsf.s[sfb][i] <= 0);
-	  }
-	}
-
-	maxover=compute_scalefacs_short(vbrsf.s,cod_info,scalefac[gr][ch].s,sbg);
-	if (maxover > 0) {
+	if (compute_scalefacs_short(vbrsf.s,cod_info,scalefac[gr][ch].s) > 0) {
 	  cod_info->scalefac_scale = 1;
-	  maxover=compute_scalefacs_short(vbrsf.s,cod_info,scalefac[gr][ch].s,sbg);
-	  if (maxover>0) {
+	  if (compute_scalefacs_short(vbrsf.s,cod_info,scalefac[gr][ch].s) >0) {
 	    /* what do we do now? */
-	    printf("not enought (short) maxover=%f \n",maxover);
+	    exit(32);
 	  }
 	}
-	for (i=0; i<3; ++i) {
-	  cod_info->subblock_gain[i] += sbg[i];
-	  assert(cod_info->subblock_gain[i] <= 7);
-	}
-
       }else{
-	/******************************************************************
-	 *
-	 *  long block scalefacs
-	 *
-	 ******************************************************************/
 	for ( sfb = 0; sfb < SBPSY_l; sfb++ )   
 	  vbrsf.l[sfb] -= vbrmax;
 
 	/* can we get away with scalefac_scale=0? */
 	cod_info->scalefac_scale = 0;
-	maxover=compute_scalefacs_long(vbrsf.l,cod_info,scalefac[gr][ch].l);
-	if (maxover > 0) {
+	if (compute_scalefacs_long(vbrsf.l,cod_info,scalefac[gr][ch].l) > 0) {
 	  cod_info->scalefac_scale = 1;
-	  maxover=compute_scalefacs_long(vbrsf.l,cod_info,scalefac[gr][ch].l);
-	  if (maxover > 0) {
+	  if (compute_scalefacs_long(vbrsf.l,cod_info,scalefac[gr][ch].l) >0) {
 	    /* what do we do now? */
-	    printf("not enought (long) maxover=%f \n",maxover);
+	    exit(32);
 	  }
 	}
       } 

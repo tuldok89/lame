@@ -9,8 +9,7 @@
 
 
 /* 1: MPEG-1, 0: MPEG-2 LSF, 1995-07-11 shn */
-FLOAT8  s_freq_table[3][4] = 
-  {{22.05, 24, 16, 0}, {44.1, 48, 32, 0}, {11.025, 12,8,0}};
+FLOAT8  s_freq_table[2][4] = {{22.05, 24, 16, 0}, {44.1, 48, 32, 0}};
 
 /* 1: MPEG-1, 0: MPEG-2 LSF, 1995-07-11 shn */
 int     bitrate_table[2][15] = {
@@ -35,25 +34,23 @@ void getframebits(lame_global_flags *gfp,int *bitsPerFrame, int *mean_bits) {
   FLOAT8 bit_rate,samp;
   int bitsPerSlot;
   int sideinfo_len;
-  lame_internal_flags *gfc=gfp->internal_flags;
-
   
   samp =      gfp->out_samplerate/1000.0;
-  bit_rate = bitrate_table[gfc->version][gfc->bitrate_index];
+  bit_rate = bitrate_table[gfp->version][gfp->bitrate_index];
   bitsPerSlot = 8;
 
   /* determine the mean bitrate for main data */
   sideinfo_len = 32;
-  if ( gfc->version == 1 )
+  if ( gfp->version == 1 )
     {   /* MPEG 1 */
-      if ( gfc->stereo == 1 )
+      if ( gfp->stereo == 1 )
 	sideinfo_len += 136;
       else
 	sideinfo_len += 256;
     }
   else
     {   /* MPEG 2 */
-      if ( gfc->stereo == 1 )
+      if ( gfp->stereo == 1 )
 	sideinfo_len += 72;
       else
 	sideinfo_len += 136;
@@ -62,9 +59,9 @@ void getframebits(lame_global_flags *gfp,int *bitsPerFrame, int *mean_bits) {
   if (gfp->error_protection) sideinfo_len += 16;
   
   /* -f fast-math option causes some strange rounding here, be carefull: */  
-  whole_SpF = floor( (gfc->framesize /samp)*(bit_rate /  (FLOAT8)bitsPerSlot) + 1e-9);
-  *bitsPerFrame = 8 * whole_SpF + (gfc->padding * 8);
-  *mean_bits = (*bitsPerFrame - sideinfo_len) / gfc->mode_gr;
+  whole_SpF = floor( (gfp->framesize /samp)*(bit_rate /  (FLOAT8)bitsPerSlot) + 1e-9);
+  *bitsPerFrame = 8 * whole_SpF + (gfp->padding * 8);
+  *mean_bits = (*bitsPerFrame - sideinfo_len) / gfp->mode_gr;
 }
 
 
@@ -88,15 +85,6 @@ void display_bitrates(FILE *out_fh)
   version = 0;
   fprintf(out_fh,"\n");
   fprintf(out_fh,"MPEG2 samplerates(kHz): 16 22.05 24 \n");
-  fprintf(out_fh,"bitrates(kbs): ");
-  for (index=1;index<15;index++) {
-    fprintf(out_fh,"%i ",bitrate_table[version][index]);
-  }
-  fprintf(out_fh,"\n");
-
-  version = 0;
-  fprintf(out_fh,"\n");
-  fprintf(out_fh,"MPEG2.5 samplerates(kHz): 8 11.025 12 \n");
   fprintf(out_fh,"bitrates(kbs): ");
   for (index=1;index<15;index++) {
     fprintf(out_fh,"%i ",bitrate_table[version][index]);
@@ -153,20 +141,39 @@ int  *version)
     else if (sRate == 16000L) {
         *version = 0; return(2);
     }
-    else if (sRate == 12000L) {
-        *version = 0; return(1);
-    }
-    else if (sRate == 11025L) {
-        *version = 0; return(0);
-    }
-    else if (sRate ==  8000L) {
-        *version = 0; return(2);
-    }
     else {
         fprintf(stderr, "SmpFrqIndex: %ldHz is not a legal sample rate\n", sRate);
         return(-1);     /* Error! */
     }
 }
+
+/*******************************************************************************
+*
+*  Allocate number of bytes of memory equal to "block".
+*
+*******************************************************************************/
+/* exit(0) changed to exit(1) on memory allocation
+ * error -- 1999/06 Alvaro Martinez Echevarria */
+
+void  *mem_alloc(unsigned long block, char *item)
+{
+
+    void    *ptr;
+
+    /* what kind of shit does ISO put out?  */
+    ptr = (void *) malloc((size_t) block /* <<1 */ ); /* allocate twice as much memory as needed. fixes dodgy
+					    memory problem on most systems */
+
+
+    if (ptr != NULL) {
+        memset(ptr, 0, (size_t) block);
+    } else {
+        fprintf(stderr,"Unable to allocate %s\n", item);
+        exit(1);
+    }
+    return(ptr);
+}
+
 
 
 /*****************************************************************************
@@ -283,7 +290,8 @@ void alloc_buffer(
 Bit_stream_struc *bs,   /* bit stream structure */
 int size)
 {
-   bs->buf = (unsigned char *)       malloc(size);
+   bs->buf = (unsigned char *)
+	mem_alloc((unsigned long) (size * sizeof(unsigned char)), "buffer");
    bs->buf_size = size;
 }
 
@@ -331,116 +339,4 @@ int N)                  /* number of bits of val */
 *  End of bit_stream.c package
 *
 *****************************************************************************/
-
-
-
-
-
-
-
-/* resampling via FIR filter, blackman window */
-INLINE double blackman(int i,double offset,double fcn,int l)
-{
-  double bkwn;
-  double wcn = (M_PI * fcn);
-  double dly = l / 2.0;
-  double x = i-offset;
-  if (x<0) x=0;
-  if (x>l) x=l;
-  bkwn = 0.42 - 0.5 * cos((x * 2) * M_PI /l)
-    + 0.08 * cos((x * 4) * M_PI /l);
-  if (fabs(x-dly)<1e-9) return wcn/M_PI;
-  else 
-    return  (sin( (wcn *  ( x - dly))) / (M_PI * ( x - dly)) * bkwn );
-}
-
-int fill_buffer_blackman(lame_global_flags *gfp,short int *outbuf,int desired_len,
-			 short int *inbuf,int len,int *num_used,int ch) {
-  
-  lame_internal_flags *gfc=gfp->internal_flags;
-  FLOAT8 offset,xvalue;
-  int i,j=0,k,value;
-  int filter_l;
-  FLOAT8 fcn,intratio;
-  short int *inbuf_old;
-
-  intratio=( fabs(gfc->resample_ratio - floor(.5+gfc->resample_ratio)) < .0001 );
-  fcn = .90/gfc->resample_ratio;
-  if (fcn>.90) fcn=.90;
-  filter_l=19;  /* must be odd */
-  /* if resample_ratio = int, filter_l should be even */
-  filter_l += intratio;
-  assert(filter_l +5 < BLACKSIZE);
-  
-  if (!gfc->fill_buffer_blackman_init) {
-    gfc->fill_buffer_blackman_init=1;
-    gfc->itime[0]=0;
-    gfc->itime[1]=0;
-    memset((char *) gfc->inbuf_old, 0, sizeof(short int)*2*BLACKSIZE);
-
-    if (intratio) {
-      /* precompute blackman filter coefficients */
-      offset=0;
-      for (i=0; i<=filter_l; ++i) {
-	gfc->blackfilt[i]=blackman(i,offset,fcn,filter_l);
-      }
-      
-    }
-  }
-  inbuf_old=gfc->inbuf_old[ch];
-
-  
-  /* time of j'th element in inbuf = itime + j/ifreq; */
-  /* time of k'th element in outbuf   =  j/ofreq */
-  for (k=0;k<desired_len;k++) {
-    FLOAT8 time0;
-    
-    time0 = k*gfc->resample_ratio;       /* time of k'th output sample */
-    j = floor( time0 -gfc->itime[ch]  );
-    if ((j+filter_l/2) >= len) break;
-
-    /* blackmon filter.  by default, window centered at j+.5(filter_l%2) */
-    /* but we want a window centered at time0.   */
-    offset = ( time0 -gfc->itime[ch] - (j + .5*(filter_l%2)));
-    assert(offset<=.500001);
-
-    xvalue=0;
-#ifdef DEBUG
-    printf("fcn = %f   offset = %f  l=%i \n",fcn,offset,filter_l);
-    printf("time0=%f   j=%f \n",time0,j+.5*(filter_l%2));
-#endif
-    for (i=0 ; i<=filter_l ; ++i) {
-      int j2 = i+j-filter_l/2;
-      int y;
-      y = (j2<0) ? inbuf_old[BLACKSIZE+j2] : inbuf[j2];
-      if (intratio) 
-	xvalue += y*gfc->blackfilt[i];
-      else
-	xvalue += y*blackman(i,offset,fcn,filter_l);
-#ifdef DEBUG
-      printf("i=%i  filter=%10.5f  y=%i \n",i,blackman(i,offset,fcn,filter_l),
-               y);
-#endif
-    }
-    value = floor(.5+xvalue);
-    if (value > 32767) outbuf[k]=32767;
-    else if (value < -32767) outbuf[k]=-32767;
-    else outbuf[k]=value;
-#ifdef DEBUG
-    printf("final value:  outbuf=%i \n\n",outbuf[k]);
-#endif
-  }
-
-  
-  /* k = number of samples added to outbuf */
-  /* last k sample used data from j,j+1, or j+1 overflowed buffer */
-  /* remove num_used samples from inbuf: */
-  *num_used = Min(len,j+filter_l/2);
-  gfc->itime[ch] += *num_used - k*gfc->resample_ratio;
-  for (i=0;i<BLACKSIZE;i++)
-    inbuf_old[i]=inbuf[*num_used + i -BLACKSIZE];
-  return k;
-}
-
-
 

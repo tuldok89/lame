@@ -47,6 +47,14 @@
 #endif
 
 
+/* Global variable definitions for lame.c */
+static Bit_stream_struc   bs;
+static III_side_info_t l3_side;
+#define MFSIZE (1152+1152+ENCDELAY-MDCTDELAY)
+static short int mfbuf[2][MFSIZE];
+static int mf_size;
+static int mf_samples_to_encode;
+
 
 
 /********************************************************************
@@ -58,36 +66,19 @@ void lame_init_params(lame_global_flags *gfp)
 {
   int i;
   FLOAT compression_ratio;
-  lame_internal_flags *gfc=gfp->internal_flags;
-
-  gfc->lame_init_params_init=1;
-
-  memset(&gfc->bs, 0, sizeof(Bit_stream_struc));
-  memset(&gfc->l3_side,0x00,sizeof(III_side_info_t));
-
-  memset((char *) gfc->mfbuf, 0, sizeof(short)*2*MFSIZE);
-
-  /* The reason for
-   *       int mf_samples_to_encode = ENCDELAY + 288;
-   * ENCDELAY = internal encoder delay.  And then we have to add 288
-   * because of the 50% MDCT overlap.  A 576 MDCT granule decodes to
-   * 1152 samples.  To synthesize the 576 samples centered under this granule
-   * we need the previous granule for the first 288 samples (no problem), and
-   * the next granule for the next 288 samples (not possible if this is last
-   * granule).  So we need to pad with 288 samples to make sure we can
-   * encode the 576 samples we are interested in.
-   */
-  gfc->mf_samples_to_encode = ENCDELAY+288;
-  gfc->mf_size=ENCDELAY-MDCTDELAY;  /* we pad input with this many 0's */
 
 
-  gfc->frameNum=0;
+  memset(&bs, 0, sizeof(Bit_stream_struc));
+  memset(&l3_side,0x00,sizeof(III_side_info_t));
+
+
+  gfp->frameNum=0;
   InitFormatBitStream();
   if (gfp->num_channels==1) {
     gfp->mode = MPG_MD_MONO;
   }
-  gfc->stereo=2;
-  if (gfp->mode == MPG_MD_MONO) gfc->stereo=1;
+  gfp->stereo=2;
+  if (gfp->mode == MPG_MD_MONO) gfp->stereo=1;
 
 #ifdef BRHIST
   if (gfp->silent) {
@@ -118,10 +109,10 @@ void lame_init_params(lame_global_flags *gfp)
 
     if (gfp->brate>0) {
       /* check if user specified bitrate requires downsampling */
-      compression_ratio = gfp->out_samplerate*16*gfc->stereo/(1000.0*gfp->brate);
+      compression_ratio = gfp->out_samplerate*16*gfp->stereo/(1000.0*gfp->brate);
       if (!gfp->VBR && compression_ratio > 13 ) {
 	/* automatic downsample, if possible */
-	gfp->out_samplerate = (10*1000.0*gfp->brate)/(16*gfc->stereo);
+	gfp->out_samplerate = (10*1000.0*gfp->brate)/(16*gfp->stereo);
 	if (gfp->out_samplerate<=16000) gfp->out_samplerate=16000;
 	else if (gfp->out_samplerate<=22050) gfp->out_samplerate=22050;
 	else if (gfp->out_samplerate<=24000) gfp->out_samplerate=24000;
@@ -132,24 +123,23 @@ void lame_init_params(lame_global_flags *gfp)
     }
   }
 
-  gfc->mode_gr = (gfp->out_samplerate <= 24000) ? 1 : 2;  /* mode_gr = 2 */
-  gfc->encoder_delay = ENCDELAY;
-  gfc->framesize = gfc->mode_gr*576;
+  gfp->mode_gr = (gfp->out_samplerate <= 24000) ? 1 : 2;  /* mode_gr = 2 */
+  gfp->encoder_delay = ENCDELAY;
+  gfp->framesize = gfp->mode_gr*576;
 
   if (gfp->brate==0) { /* user didn't specify a bitrate, use default */
     gfp->brate=128;
-    if (gfc->mode_gr==1) gfp->brate=64;
+    if (gfp->mode_gr==1) gfp->brate=64;
   }
 
 
-  gfc->resample_ratio=1;
-  if (gfp->out_samplerate != gfp->in_samplerate) 
-        gfc->resample_ratio = (FLOAT)gfp->in_samplerate/(FLOAT)gfp->out_samplerate;
+  gfp->resample_ratio=1;
+  if (gfp->out_samplerate != gfp->in_samplerate) gfp->resample_ratio = (FLOAT)gfp->in_samplerate/(FLOAT)gfp->out_samplerate;
 
   /* estimate total frames.  must be done after setting sampling rate so
    * we know the framesize.  */
-  gfc->totalframes=0;
-  gfc->totalframes = 2+ gfp->num_samples/(gfc->resample_ratio*gfc->framesize);
+  gfp->totalframes=0;
+  gfp->totalframes = 2+ gfp->num_samples/(gfp->resample_ratio*gfp->framesize);
 
 
 
@@ -169,7 +159,7 @@ void lame_init_params(lame_global_flags *gfp)
 
   */
   if (gfp->brate >= 320) gfp->VBR=0;  /* dont bother with VBR at 320kbs */
-  compression_ratio = gfp->out_samplerate*16*gfc->stereo/(1000.0*gfp->brate);
+  compression_ratio = gfp->out_samplerate*16*gfp->stereo/(1000.0*gfp->brate);
 
 
   /* for VBR, take a guess at the compression_ratio */
@@ -216,14 +206,9 @@ void lame_init_params(lame_global_flags *gfp)
 
     /* Should we use some lowpass filters? */
     int band = 1+floor(.5 + 14-18*log(compression_ratio/16.0));
-    if (gfc->resample_ratio != 1) {
-      /* resampling.  if we are resampling, add lowpass at least 90% */
-      band = Min(band,29);
-    }
-
     if (band < 31) {
-      gfc->lowpass1 = band/31.0;
-      gfc->lowpass2 = band/31.0;
+      gfp->lowpass1 = band/31.0;
+      gfp->lowpass2 = band/31.0;
     }
   }
 
@@ -231,96 +216,100 @@ void lame_init_params(lame_global_flags *gfp)
   /* apply user driven filters*/
   /****************************************************************/
   if ( gfp->highpassfreq > 0 ) {
-    gfc->highpass1 = 2.0*gfp->highpassfreq/gfp->out_samplerate; /* will always be >=0 */
+    gfp->highpass1 = 2.0*gfp->highpassfreq/gfp->out_samplerate; /* will always be >=0 */
     if ( gfp->highpasswidth >= 0 ) {
-      gfc->highpass2 = 2.0*(gfp->highpassfreq+gfp->highpasswidth)/gfp->out_samplerate;
+      gfp->highpass2 = 2.0*(gfp->highpassfreq+gfp->highpasswidth)/gfp->out_samplerate;
     } else {
       /* 15% above on default */
-      /* gfc->highpass2 = 1.15*2.0*gfp->highpassfreq/gfp->out_samplerate;  */
-      gfc->highpass2 = 1.00*2.0*gfp->highpassfreq/gfp->out_samplerate; 
+      /* gfp->highpass2 = 1.15*2.0*gfp->highpassfreq/gfp->out_samplerate;  */
+      gfp->highpass2 = 1.00*2.0*gfp->highpassfreq/gfp->out_samplerate; 
     }
+    gfp->highpass1 = Min( 1, gfp->highpass1 );
+    gfp->highpass2 = Min( 1, gfp->highpass2 );
   }
 
   if ( gfp->lowpassfreq > 0 ) {
-    gfc->lowpass2 = 2.0*gfp->lowpassfreq/gfp->out_samplerate; /* will always be >=0 */
+    gfp->lowpass2 = 2.0*gfp->lowpassfreq/gfp->out_samplerate; /* will always be >=0 */
     if ( gfp->lowpasswidth >= 0 ) {
-      gfc->lowpass1 = 2.0*(gfp->lowpassfreq-gfp->lowpasswidth)/gfp->out_samplerate;
-      if ( gfc->lowpass1 < 0 ) { /* has to be >= 0 */
-	gfc->lowpass1 = 0;
+      gfp->lowpass1 = 2.0*(gfp->lowpassfreq-gfp->lowpasswidth)/gfp->out_samplerate;
+      if ( gfp->lowpass1 < 0 ) { /* has to be >= 0 */
+	gfp->lowpass1 = 0;
       }
     } else {
       /* 15% below on default */
-      /* gfc->lowpass1 = 0.85*2.0*gfp->lowpassfreq/gfp->out_samplerate;  */
-      gfc->lowpass1 = 1.00*2.0*gfp->lowpassfreq/gfp->out_samplerate;
+      /* gfp->lowpass1 = 0.85*2.0*gfp->lowpassfreq/gfp->out_samplerate;  */
+      gfp->lowpass1 = 1.00*2.0*gfp->lowpassfreq/gfp->out_samplerate;
     }
+    gfp->lowpass1 = Min( 1, gfp->lowpass1 );
+    gfp->lowpass2 = Min( 1, gfp->lowpass2 );
   }
 
 
   /***************************************************************/
   /* compute info needed for polyphase filter                    */
   /***************************************************************/
-  if (gfc->filter_type==0) {
+  if (gfp->filter_type==0) {
     int band,maxband,minband;
     FLOAT8 amp,freq;
-    if (gfc->lowpass1 > 0) {
+    if (gfp->lowpass1 > 0) {
       minband=999;
       maxband=-1;
       for (band=0;  band <=31 ; ++band) { 
 	freq = band/31.0;
 	amp = 1;
 	/* this band and above will be zeroed: */
-	if (freq >= gfc->lowpass2) {
-	  gfc->lowpass_band= Min(gfc->lowpass_band,band);
+	if (freq >= gfp->lowpass2) {
+	  gfp->lowpass_band= Min(gfp->lowpass_band,band);
 	  amp=0;
 	}
-	if (gfc->lowpass1 < freq && freq < gfc->lowpass2) {
+	if (gfp->lowpass1 < freq && freq < gfp->lowpass2) {
           minband = Min(minband,band);
           maxband = Max(maxband,band);
-	  amp = cos((PI/2)*(gfc->lowpass1-freq)/(gfc->lowpass2-gfc->lowpass1));
+	  amp = cos((PI/2)*(gfp->lowpass1-freq)/(gfp->lowpass2-gfp->lowpass1));
 	}
 	/* printf("lowpass band=%i  amp=%f \n",band,amp);*/
       }
       /* compute the *actual* transition band implemented by the polyphase filter */
-      if (minband==999) gfc->lowpass1 = (gfc->lowpass_band-.75)/31.0;
-      else gfc->lowpass1 = (minband-.75)/31.0;
-      gfc->lowpass2 = gfc->lowpass_band/31.0;
+      if (minband==999) gfp->lowpass1 = (gfp->lowpass_band-.75)/31.0;
+      else gfp->lowpass1 = (minband-.75)/31.0;
+      gfp->lowpass2 = gfp->lowpass_band/31.0;
     }
 
     /* make sure highpass filter is within 90% of whan the effective highpass
      * frequency will be */
-    if (gfc->highpass2 > 0) 
-      if (gfc->highpass2 <  .9*(.75/31.0) ) {
-	gfc->highpass1=0; gfc->highpass2=0;
+    if (gfp->highpass2 > 0) 
+      if (gfp->highpass2 <  .9*(.75/31.0) ) {
+	gfp->highpass1=0; gfp->highpass2=0;
 	fprintf(stderr,"Warning: highpass filter disabled.  highpass frequency to small\n");
       }
     
 
-    if (gfc->highpass2 > 0) {
+    if (gfp->highpass2 > 0) {
       minband=999;
       maxband=-1;
       for (band=0;  band <=31; ++band) { 
 	freq = band/31.0;
 	amp = 1;
 	/* this band and below will be zereod */
-	if (freq <= gfc->highpass1) {
-	  gfc->highpass_band = Max(gfc->highpass_band,band);
+	if (freq <= gfp->highpass1) {
+	  gfp->highpass_band = Max(gfp->highpass_band,band);
 	  amp=0;
 	}
-	if (gfc->highpass1 < freq && freq < gfc->highpass2) {
+	if (gfp->highpass1 < freq && freq < gfp->highpass2) {
           minband = Min(minband,band);
           maxband = Max(maxband,band);
-	  amp = cos((PI/2)*(gfc->highpass2-freq)/(gfc->highpass2-gfc->highpass1));
+	  amp = cos((PI/2)*(gfp->highpass2-freq)/(gfp->highpass2-gfp->highpass1));
 	}
 	/*	printf("highpass band=%i  amp=%f \n",band,amp);*/
       }
       /* compute the *actual* transition band implemented by the polyphase filter */
-      gfc->highpass1 = gfc->highpass_band/31.0;
-      if (maxband==-1) gfc->highpass2 = (gfc->highpass_band+.75)/31.0;
-      else gfc->highpass2 = (maxband+.75)/31.0;
+      gfp->highpass1 = gfp->highpass_band/31.0;
+      if (maxband==-1) gfp->highpass2 = (gfp->highpass_band+.75)/31.0;
+      else gfp->highpass2 = (maxband+.75)/31.0;
     }
     /*
-    printf("lowpass band with amp=0:  %i \n",gfc->lowpass_band);
-    printf("highpass band with amp=0:  %i \n",gfc->highpass_band);
+    printf("lowpass band with amp=0:  %i \n",gfp->lowpass_band);
+    printf("highpass band with amp=0:  %i \n",gfp->highpass_band);
     */
   }
 
@@ -329,22 +318,22 @@ void lame_init_params(lame_global_flags *gfp)
   /***************************************************************/
   /* compute info needed for FIR filter */
   /***************************************************************/
-  if (gfc->filter_type==1) {
+  if (gfp->filter_type==1) {
   }
 
 
 
 
-  gfc->mode_ext=MPG_MD_LR_LR;
-  gfc->stereo = (gfp->mode == MPG_MD_MONO) ? 1 : 2;
+  gfp->mode_ext=MPG_MD_LR_LR;
+  gfp->stereo = (gfp->mode == MPG_MD_MONO) ? 1 : 2;
 
 
-  gfc->samplerate_index = SmpFrqIndex((long)gfp->out_samplerate, &gfc->version);
-  if( gfc->samplerate_index < 0) {
+  gfp->samplerate_index = SmpFrqIndex((long)gfp->out_samplerate, &gfp->version);
+  if( gfp->samplerate_index < 0) {
     display_bitrates(stderr);
     exit(1);
   }
-  if( (gfc->bitrate_index = BitrateIndex(gfp->brate, gfc->version,gfp->out_samplerate)) < 0) {
+  if( (gfp->bitrate_index = BitrateIndex(gfp->brate, gfp->version,gfp->out_samplerate)) < 0) {
     display_bitrates(stderr);
     exit(1);
   }
@@ -356,21 +345,21 @@ void lame_init_params(lame_global_flags *gfp)
     if (0==gfp->VBR_max_bitrate_kbps) {
       /* default max bitrate is 256kbs */
       /* we do not normally allow 320bps frams with VBR, unless: */
-      gfc->VBR_max_bitrate=13;   /* default: allow 256kbs */
-      if (gfp->VBR_min_bitrate_kbps>=256) gfc->VBR_max_bitrate=14;
-      if (gfp->VBR_q == 0) gfc->VBR_max_bitrate=14;   /* allow 320kbs */
-      if (gfp->VBR_q >= 4) gfc->VBR_max_bitrate=12;   /* max = 224kbs */
-      if (gfp->VBR_q >= 8) gfc->VBR_max_bitrate=9;    /* low quality, max = 128kbs */
+      gfp->VBR_max_bitrate=13;   /* default: allow 256kbs */
+      if (gfp->VBR_min_bitrate_kbps>=256) gfp->VBR_max_bitrate=14;
+      if (gfp->VBR_q == 0) gfp->VBR_max_bitrate=14;   /* allow 320kbs */
+      if (gfp->VBR_q >= 4) gfp->VBR_max_bitrate=12;   /* max = 224kbs */
+      if (gfp->VBR_q >= 8) gfp->VBR_max_bitrate=9;    /* low quality, max = 128kbs */
     }else{
-      if( (gfc->VBR_max_bitrate  = BitrateIndex(gfp->VBR_max_bitrate_kbps, gfc->version,gfp->out_samplerate)) < 0) {
+      if( (gfp->VBR_max_bitrate  = BitrateIndex(gfp->VBR_max_bitrate_kbps, gfp->version,gfp->out_samplerate)) < 0) {
 	display_bitrates(stderr);
 	exit(1);
       }
     }
     if (0==gfp->VBR_min_bitrate_kbps) {
-      gfc->VBR_min_bitrate=1;  /* 32 kbps */
+      gfp->VBR_min_bitrate=1;  /* 32 kbps */
     }else{
-      if( (gfc->VBR_min_bitrate  = BitrateIndex(gfp->VBR_min_bitrate_kbps, gfc->version,gfp->out_samplerate)) < 0) {
+      if( (gfp->VBR_min_bitrate  = BitrateIndex(gfp->VBR_min_bitrate_kbps, gfp->version,gfp->out_samplerate)) < 0) {
 	display_bitrates(stderr);
 	exit(1);
       }
@@ -378,14 +367,8 @@ void lame_init_params(lame_global_flags *gfp)
 
   }
 
-  /* VBR needs at least the output of GPSYCHO,
-   * so we have to garantee that by setting a minimum 
-   * quality level, actually level 7 does it.
-   * the -v and -V x settings switch the quality to level 2
-   * you would have to add a -f or -q 5 to reduce the quality
-   * down to level 7 or 5
-   */
-  if (gfp->VBR) gfp->quality=Min(gfp->quality,7);
+
+  if (gfp->VBR) gfp->quality=Min(gfp->quality,2);    /* always use quality <=2  with VBR */
   /* dont allow forced mid/side stereo for mono output */
   if (gfp->mode == MPG_MD_MONO) gfp->force_ms=0;
 
@@ -409,7 +392,7 @@ void lame_init_params(lame_global_flags *gfp)
     gfp->bWriteVbrTag=0;  /* disable Xing VBR tag */
   }
 
-  init_bit_stream_w(&gfc->bs);
+  init_bit_stream_w(&bs);
 
 
 
@@ -418,80 +401,78 @@ void lame_init_params(lame_global_flags *gfp)
 
   /* no psymodel, no noise shaping */
   if (gfp->quality==9) {
-    gfc->filter_type=0;
-    gfc->psymodel=0;
-    gfc->quantization=0;
-    gfc->noise_shaping=0;
-    gfc->noise_shaping_stop=0;
-    gfc->use_best_huffman=0;
+    gfp->filter_type=0;
+    gfp->psymodel=0;
+    gfp->quantization=0;
+    gfp->noise_shaping=0;
+    gfp->noise_shaping_stop=0;
+    gfp->use_best_huffman=0;
   }
 
   if (gfp->quality==8) gfp->quality=7;
 
   /* use psymodel (for short block and m/s switching), but no noise shapping */
   if (gfp->quality==7) {
-    gfc->filter_type=0;
-    gfc->psymodel=1;
-    gfc->quantization=0;
-    gfc->noise_shaping=0;
-    gfc->noise_shaping_stop=0;
-    gfc->use_best_huffman=0;
+    gfp->filter_type=0;
+    gfp->psymodel=1;
+    gfp->quantization=0;
+    gfp->noise_shaping=0;
+    gfp->noise_shaping_stop=0;
+    gfp->use_best_huffman=0;
   }
 
   if (gfp->quality==6) gfp->quality=5;
 
   if (gfp->quality==5) {
     /* the default */
-    gfc->filter_type=0;
-    gfc->psymodel=1;
-    gfc->quantization=0;
-    gfc->noise_shaping=1;
-    gfc->noise_shaping_stop=0;
-    gfc->use_best_huffman=0;
+    gfp->filter_type=0;
+    gfp->psymodel=1;
+    gfp->quantization=0;
+    gfp->noise_shaping=1;
+    gfp->noise_shaping_stop=0;
+    gfp->use_best_huffman=0;
   }
 
   if (gfp->quality==4) gfp->quality=2;
   if (gfp->quality==3) gfp->quality=2;
 
   if (gfp->quality==2) {
-    gfc->filter_type=0;
-    gfc->psymodel=1;
-    gfc->quantization=1;
-    gfc->noise_shaping=1;
-    gfc->noise_shaping_stop=0;
-    gfc->use_best_huffman=1;
+    gfp->filter_type=0;
+    gfp->psymodel=1;
+    gfp->quantization=1;
+    gfp->noise_shaping=1;
+    gfp->noise_shaping_stop=0;
+    gfp->use_best_huffman=1;
   }
 
   if (gfp->quality==1) {
-    gfc->filter_type=0;
-    gfc->psymodel=1;
-    gfc->quantization=1;
-    gfc->noise_shaping=1;
-    gfc->noise_shaping_stop=1;
-    gfc->use_best_huffman=1;
+    gfp->filter_type=0;
+    gfp->psymodel=1;
+    gfp->quantization=1;
+    gfp->noise_shaping=1;
+    gfp->noise_shaping_stop=1;
+    gfp->use_best_huffman=1;
   }
 
   if (gfp->quality==0) {
     /* 0..1 quality */
-    gfc->filter_type=1;         /* not yet coded */
-    gfc->psymodel=1;
-    gfc->quantization=1;
-    gfc->noise_shaping=3;       /* not yet coded */
-    gfc->noise_shaping_stop=2;  /* not yet coded */
-    gfc->use_best_huffman=2;   /* not yet coded */
+    gfp->filter_type=1;         /* not yet coded */
+    gfp->psymodel=1;
+    gfp->quantization=1;
+    gfp->noise_shaping=3;       /* not yet coded */
+    gfp->noise_shaping_stop=2;  /* not yet coded */
+    gfp->use_best_huffman=2;   /* not yet coded */
     exit(-99);
   }
 
 
   for (i = 0; i < SBMAX_l + 1; i++) {
     scalefac_band.l[i] =
-      sfBandIndex[gfc->samplerate_index + (gfc->version * 3) + 
-             6*(gfp->out_samplerate<16000)].l[i];
+      sfBandIndex[gfp->samplerate_index + (gfp->version * 3)].l[i];
   }
   for (i = 0; i < SBMAX_s + 1; i++) {
     scalefac_band.s[i] =
-      sfBandIndex[gfc->samplerate_index + (gfc->version * 3) + 
-             6*(gfp->out_samplerate<16000)].s[i];
+      sfBandIndex[gfp->samplerate_index + (gfp->version * 3)].s[i];
   }
 
 
@@ -499,7 +480,7 @@ void lame_init_params(lame_global_flags *gfp)
   if (gfp->bWriteVbrTag)
     {
       /* Write initial VBR Header to bitstream */
-      InitVbrTag(&gfc->bs,1-gfc->version,gfp->mode,gfc->samplerate_index);
+      InitVbrTag(&bs,1-gfp->version,gfp->mode,gfp->samplerate_index);
     }
 
 #ifdef HAVEGTK
@@ -533,30 +514,28 @@ void lame_init_params(lame_global_flags *gfp)
  ************************************************************************/
 void lame_print_config(lame_global_flags *gfp)
 {
-  lame_internal_flags *gfc=gfp->internal_flags;
-
   static const char *mode_names[4] = { "stereo", "j-stereo", "dual-ch", "single-ch" };
   FLOAT out_samplerate=gfp->out_samplerate/1000.0;
-  FLOAT in_samplerate = gfc->resample_ratio*out_samplerate;
+  FLOAT in_samplerate = gfp->resample_ratio*out_samplerate;
   FLOAT compression=
-    (FLOAT)(gfc->stereo*16*out_samplerate)/(FLOAT)(gfp->brate);
+    (FLOAT)(gfp->stereo*16*out_samplerate)/(FLOAT)(gfp->brate);
 
   lame_print_version(stderr);
-  if (gfp->num_channels==2 && gfc->stereo==1) {
+  if (gfp->num_channels==2 && gfp->stereo==1) {
     fprintf(stderr, "Autoconverting from stereo to mono. Setting encoding to mono mode.\n");
   }
-  if (gfc->resample_ratio!=1) {
-    fprintf(stderr,"Resampling:  input=%.1fkHz  output=%.1fkHz\n",
-	    in_samplerate,out_samplerate);
+  if (gfp->resample_ratio!=1) {
+    fprintf(stderr,"Resampling:  input=%ikHz  output=%ikHz\n",
+	    (int)in_samplerate,(int)out_samplerate);
   }
-  if (gfc->highpass2>0.0)
+  if (gfp->highpass2>0.0)
     fprintf(stderr, "Using polyphase highpass filter, transition band: %.0f Hz -  %.0f Hz\n",
-	    gfc->highpass1*out_samplerate*500,
-	    gfc->highpass2*out_samplerate*500);
-  if (gfc->lowpass1>0.0)
+	    gfp->highpass1*out_samplerate*500,
+	    gfp->highpass2*out_samplerate*500);
+  if (gfp->lowpass1>0.0)
     fprintf(stderr, "Using polyphase lowpass filter,  transition band:  %.0f Hz - %.0f Hz\n",
-	    gfc->lowpass1*out_samplerate*500,
-	    gfc->lowpass2*out_samplerate*500);
+	    gfp->lowpass1*out_samplerate*500,
+	    gfp->lowpass2*out_samplerate*500);
 
   if (gfp->gtkflag) {
     fprintf(stderr, "Analyzing %s \n",gfp->inPath);
@@ -568,11 +547,11 @@ void lame_print_config(lame_global_flags *gfp)
     if (gfp->VBR)
       fprintf(stderr, "Encoding as %.1fkHz VBR(q=%i) %s MPEG%i LayerIII  qval=%i\n",
 	      gfp->out_samplerate/1000.0,
-	      gfp->VBR_q,mode_names[gfp->mode],2-gfc->version,gfp->quality);
+	      gfp->VBR_q,mode_names[gfp->mode],2-gfp->version,gfp->quality);
     else
       fprintf(stderr, "Encoding as %.1f kHz %d kbps %s MPEG%i LayerIII (%4.1fx)  qval=%i\n",
 	      gfp->out_samplerate/1000.0,gfp->brate,
-	      mode_names[gfp->mode],2-gfc->version,compression,gfp->quality);
+	      mode_names[gfp->mode],2-gfp->version,compression,gfp->quality);
   }
   fflush(stderr);
 }
@@ -623,8 +602,13 @@ FFT's                    <---------1024---------->
 */
 int lame_encode_frame(lame_global_flags *gfp,
 short int inbuf_l[],short int inbuf_r[],
-char *mp3buf, int mp3buf_size)
+int mf_size,char *mp3buf, int mp3buf_size)
 {
+  static unsigned long frameBits;
+  static unsigned long bitsPerSlot;
+  static FLOAT8 frac_SpF;
+  static FLOAT8 slot_lag;
+  static unsigned long sentBits = 0;
   FLOAT8 xr[2][2][576];
   int l3_enc[2][2][576];
   int mp3count;
@@ -633,8 +617,6 @@ char *mp3buf, int mp3buf_size)
   III_psy_ratio (*masking)[2][2];  /*LR ratios and MS ratios*/
   III_scalefac_t scalefac[2][2];
   short int *inbuf[2];
-  lame_internal_flags *gfc=gfp->internal_flags;
-
 
   typedef FLOAT8 pedata[2][2];
   pedata pe,pe_MS;
@@ -644,8 +626,10 @@ char *mp3buf, int mp3buf_size)
   int bitsPerFrame;
 
   int check_ms_stereo;
+  static FLOAT8 ms_ratio[2]={0,0};
   FLOAT8 ms_ratio_next=0;
   FLOAT8 ms_ratio_prev=0;
+  static FLOAT8 ms_ener_ratio[2]={0,0};
 
   memset((char *) masking_ratio, 0, sizeof(masking_ratio));
   memset((char *) masking_MS_ratio, 0, sizeof(masking_MS_ratio));
@@ -653,58 +637,57 @@ char *mp3buf, int mp3buf_size)
   inbuf[0]=inbuf_l;
   inbuf[1]=inbuf_r;
 
-  gfc->mode_ext = MPG_MD_LR_LR;
+  gfp->mode_ext = MPG_MD_LR_LR;
 
-  if (gfc->lame_encode_frame_init==0 )  {
+  if (gfp->frameNum==0 )  {
     /* Figure average number of 'slots' per frame. */
     FLOAT8 avg_slots_per_frame;
     FLOAT8 sampfreq =   gfp->out_samplerate/1000.0;
     int bit_rate = gfp->brate;
-    gfc->lame_encode_frame_init=1;
-
-    gfc->sentBits = 0;
-    avg_slots_per_frame = (bit_rate*gfc->framesize) /
-           (sampfreq* 8);
+    sentBits = 0;
+    bitsPerSlot = 8;
+    avg_slots_per_frame = (bit_rate*gfp->framesize) /
+           (sampfreq* bitsPerSlot);
     /* -f fast-math option causes some strange rounding here, be carefull: */
-    gfc->frac_SpF  = avg_slots_per_frame - floor(avg_slots_per_frame + 1e-9);
-    if (fabs(gfc->frac_SpF) < 1e-9) gfc->frac_SpF = 0;
+    frac_SpF  = avg_slots_per_frame - floor(avg_slots_per_frame + 1e-9);
+    if (fabs(frac_SpF) < 1e-9) frac_SpF = 0;
 
-    gfc->slot_lag  = -gfc->frac_SpF;
-    gfc->padding = 1;
-    if (gfc->frac_SpF==0) gfc->padding = 0;
+    slot_lag  = -frac_SpF;
+    gfp->padding = 1;
+    if (frac_SpF==0) gfp->padding = 0;
     /* check FFT will not use a negative starting offset */
     assert(576>=FFTOFFSET);
     /* check if we have enough data for FFT */
-    assert(gfc->mf_size>=(BLKSIZE+gfc->framesize-FFTOFFSET));
+    assert(mf_size>=(BLKSIZE+gfp->framesize-FFTOFFSET));
   }
 
 
   /********************** padding *****************************/
   switch (gfp->padding_type) {
   case 0:
-    gfc->padding=0;
+    gfp->padding=0;
     break;
   case 1:
-    gfc->padding=1;
+    gfp->padding=1;
     break;
   case 2:
   default:
     if (gfp->VBR) {
-      gfc->padding=0;
+      gfp->padding=0;
     } else {
       if (gfp->disable_reservoir) {
-	gfc->padding = 0;
-	/* if the user specified --nores, dont very gfc->padding either */
+	gfp->padding = 0;
+	/* if the user specified --nores, dont very gfp->padding either */
 	/* tiny changes in frac_SpF rounding will cause file differences */
       }else{
-	if (gfc->frac_SpF != 0) {
-	  if (gfc->slot_lag > (gfc->frac_SpF-1.0) ) {
-	    gfc->slot_lag -= gfc->frac_SpF;
-	    gfc->padding = 0;
+	if (frac_SpF != 0) {
+	  if (slot_lag > (frac_SpF-1.0) ) {
+	    slot_lag -= frac_SpF;
+	    gfp->padding = 0;
 	  }
 	  else {
-	    gfc->padding = 1;
-	    gfc->slot_lag += (1-gfc->frac_SpF);
+	    gfp->padding = 1;
+	    slot_lag += (1-frac_SpF);
 	  }
 	}
       }
@@ -714,9 +697,9 @@ char *mp3buf, int mp3buf_size)
 
   /********************** status display  *****************************/
   if (!gfp->gtkflag && !gfp->silent) {
-    int mod = gfc->version == 0 ? 100 : 50;
-    if (gfc->frameNum%mod==0) {
-      timestatus(gfp->out_samplerate,gfc->frameNum,gfc->totalframes,gfc->framesize);
+    int mod = gfp->version == 0 ? 200 : 50;
+    if (gfp->frameNum%mod==0) {
+      timestatus(gfp->out_samplerate,gfp->frameNum,gfp->totalframes,gfp->framesize);
 #ifdef BRHIST
       if (disp_brhist)
 	{
@@ -728,7 +711,7 @@ char *mp3buf, int mp3buf_size)
   }
 
 
-  if (gfc->psymodel) {
+  if (gfp->psymodel) {
     /* psychoacoustic model
      * psy model has a 1 granule (576) delay that we must compensate for
      * (mt 6/99).
@@ -736,34 +719,34 @@ char *mp3buf, int mp3buf_size)
     short int *bufp[2];  /* address of beginning of left & right granule */
     int blocktype[2];
 
-    ms_ratio_prev=gfc->ms_ratio[gfc->mode_gr-1];
-    for (gr=0; gr < gfc->mode_gr ; gr++) {
+    ms_ratio_prev=ms_ratio[gfp->mode_gr-1];
+    for (gr=0; gr < gfp->mode_gr ; gr++) {
 
-      for ( ch = 0; ch < gfc->stereo; ch++ )
+      for ( ch = 0; ch < gfp->stereo; ch++ )
 	bufp[ch] = &inbuf[ch][576 + gr*576-FFTOFFSET];
 
       L3psycho_anal( gfp,bufp, gr, 
-		     &gfc->ms_ratio[gr],&ms_ratio_next,&gfc->ms_ener_ratio[gr],
+		     &ms_ratio[gr],&ms_ratio_next,&ms_ener_ratio[gr],
 		     masking_ratio, masking_MS_ratio,
 		     pe[gr],pe_MS[gr],blocktype);
 
-      for ( ch = 0; ch < gfc->stereo; ch++ )
-	gfc->l3_side.gr[gr].ch[ch].tt.block_type=blocktype[ch];
+      for ( ch = 0; ch < gfp->stereo; ch++ )
+	l3_side.gr[gr].ch[ch].tt.block_type=blocktype[ch];
 
     }
   }else{
-    for (gr=0; gr < gfc->mode_gr ; gr++)
-      for ( ch = 0; ch < gfc->stereo; ch++ ) {
-	gfc->l3_side.gr[gr].ch[ch].tt.block_type=NORM_TYPE;
+    for (gr=0; gr < gfp->mode_gr ; gr++)
+      for ( ch = 0; ch < gfp->stereo; ch++ ) {
+	l3_side.gr[gr].ch[ch].tt.block_type=NORM_TYPE;
 	pe[gr][ch]=700;
       }
   }
 
 
   /* block type flags */
-  for( gr = 0; gr < gfc->mode_gr; gr++ ) {
-    for ( ch = 0; ch < gfc->stereo; ch++ ) {
-      gr_info *cod_info = &gfc->l3_side.gr[gr].ch[ch].tt;
+  for( gr = 0; gr < gfp->mode_gr; gr++ ) {
+    for ( ch = 0; ch < gfp->stereo; ch++ ) {
+      gr_info *cod_info = &l3_side.gr[gr].ch[ch].tt;
       cod_info->mixed_block_flag = 0;     /* never used by this model */
       if (cod_info->block_type == NORM_TYPE )
 	cod_info->window_switching_flag = 0;
@@ -773,40 +756,40 @@ char *mp3buf, int mp3buf_size)
   }
 
   /* polyphase filtering / mdct */
-  mdct_sub48(gfp,inbuf[0], inbuf[1], xr, &gfc->l3_side);
+  mdct_sub48(gfp,inbuf[0], inbuf[1], xr, &l3_side);
 
-  /* use m/s gfc->stereo? */
+  /* use m/s gfp->stereo? */
   check_ms_stereo =  (gfp->mode == MPG_MD_JOINT_STEREO);
   if (check_ms_stereo) {
     /* make sure block type is the same in each channel */
     check_ms_stereo =
-      (gfc->l3_side.gr[0].ch[0].tt.block_type==gfc->l3_side.gr[0].ch[1].tt.block_type) &&
-      (gfc->l3_side.gr[1].ch[0].tt.block_type==gfc->l3_side.gr[1].ch[1].tt.block_type);
+      (l3_side.gr[0].ch[0].tt.block_type==l3_side.gr[0].ch[1].tt.block_type) &&
+      (l3_side.gr[1].ch[0].tt.block_type==l3_side.gr[1].ch[1].tt.block_type);
   }
   if (check_ms_stereo) {
     /* ms_ratio = is like the ratio of side_energy/total_energy */
     FLOAT8 ms_ratio_ave,ms_ener_ratio_ave;
     /*     ms_ratio_ave = .5*(ms_ratio[0] + ms_ratio[1]);*/
-    ms_ratio_ave = .25*(gfc->ms_ratio[0] + gfc->ms_ratio[1]+
+    ms_ratio_ave = .25*(ms_ratio[0] + ms_ratio[1]+
 			 ms_ratio_prev + ms_ratio_next);
-    ms_ener_ratio_ave = .5*(gfc->ms_ener_ratio[0]+gfc->ms_ener_ratio[1]);
-    if ( ms_ratio_ave <.35 /*&& ms_ener_ratio_ave<.75*/ ) gfc->mode_ext = MPG_MD_MS_LR;
+    ms_ener_ratio_ave = .5*(ms_ener_ratio[0]+ms_ener_ratio[1]);
+    if ( ms_ratio_ave <.35 /*&& ms_ener_ratio_ave<.75*/ ) gfp->mode_ext = MPG_MD_MS_LR;
   }
-  if (gfp->force_ms) gfc->mode_ext = MPG_MD_MS_LR;
+  if (gfp->force_ms) gfp->mode_ext = MPG_MD_MS_LR;
 
 
 #ifdef HAVEGTK
   if (gfp->gtkflag) {
     int j;
-    for ( gr = 0; gr < gfc->mode_gr; gr++ ) {
-      for ( ch = 0; ch < gfc->stereo; ch++ ) {
-	pinfo->ms_ratio[gr]=gfc->ms_ratio[gr];
-	pinfo->ms_ener_ratio[gr]=gfc->ms_ener_ratio[gr];
+    for ( gr = 0; gr < gfp->mode_gr; gr++ ) {
+      for ( ch = 0; ch < gfp->stereo; ch++ ) {
+	pinfo->ms_ratio[gr]=ms_ratio[gr];
+	pinfo->ms_ener_ratio[gr]=ms_ener_ratio[gr];
 	pinfo->blocktype[gr][ch]=
-	  gfc->l3_side.gr[gr].ch[ch].tt.block_type;
+	  l3_side.gr[gr].ch[ch].tt.block_type;
 	for ( j = 0; j < 576; j++ ) pinfo->xr[gr][ch][j]=xr[gr][ch][j];
 	/* if MS stereo, switch to MS psy data */
-	if (gfc->mode_ext==MPG_MD_MS_LR) {
+	if (gfp->mode_ext==MPG_MD_MS_LR) {
 	  pinfo->pe[gr][ch]=pinfo->pe[gr][ch+2];
 	  pinfo->ers[gr][ch]=pinfo->ers[gr][ch+2];
 	  memcpy(pinfo->energy[gr][ch],pinfo->energy[gr][ch+2],
@@ -821,7 +804,7 @@ char *mp3buf, int mp3buf_size)
 
 
   /* bit and noise allocation */
-  if (MPG_MD_MS_LR == gfc->mode_ext) {
+  if (MPG_MD_MS_LR == gfp->mode_ext) {
     masking = &masking_MS_ratio;    /* use MS masking */
     pe_use=&pe_MS;
   } else {
@@ -831,15 +814,16 @@ char *mp3buf, int mp3buf_size)
 
 
   /*
-  VBR_iteration_loop_new( gfp,*pe_use, ms_ratio, xr, masking, l3_enc,
+  VBR_iteration_loop_new( gfp,*pe_use, ms_ratio, xr, masking, &l3_side, l3_enc,
   	  &scalefac);
   */
 
+
   if (gfp->VBR) {
-    VBR_iteration_loop( gfp,*pe_use, gfc->ms_ratio, xr, *masking, l3_enc,
+    VBR_iteration_loop( gfp,*pe_use, ms_ratio, xr, *masking, &l3_side, l3_enc,
 			scalefac);
   }else{
-    iteration_loop( gfp,*pe_use, gfc->ms_ratio, xr, *masking, l3_enc,
+    iteration_loop( gfp,*pe_use, ms_ratio, xr, *masking, &l3_side, l3_enc,
 		    scalefac);
   }
 
@@ -847,46 +831,130 @@ char *mp3buf, int mp3buf_size)
 
 
 #ifdef BRHIST
-  brhist_temp[gfc->bitrate_index]++;
+  brhist_temp[gfp->bitrate_index]++;
 #endif
 
 
   /*  write the frame to the bitstream  */
   getframebits(gfp,&bitsPerFrame,&mean_bits);
-  III_format_bitstream( gfp,bitsPerFrame, l3_enc, scalefac);
+  III_format_bitstream( gfp,bitsPerFrame, l3_enc, &l3_side,
+			scalefac, &bs);
 
 
-  gfc->frameBits = gfc->bs.totbit - gfc->sentBits;
+  frameBits = bs.totbit - sentBits;
 
 
-  if ( gfc->frameBits % 8 )   /* a program failure */
+  if ( frameBits % bitsPerSlot )   /* a program failure */
     fprintf( stderr, "Sent %ld bits = %ld slots plus %ld\n",
-	     gfc->frameBits, gfc->frameBits/8,
-	     gfc->frameBits%8 );
-  gfc->sentBits += gfc->frameBits;
+	     frameBits, frameBits/bitsPerSlot,
+	     frameBits%bitsPerSlot );
+  sentBits += frameBits;
 
   /* copy mp3 bit buffer into array */
-  mp3count = copy_buffer(mp3buf,mp3buf_size,&gfc->bs);
+  mp3count = copy_buffer(mp3buf,mp3buf_size,&bs);
 
-  if (gfp->bWriteVbrTag) AddVbrFrame((int)(gfc->sentBits/8));
+  if (gfp->bWriteVbrTag) AddVbrFrame((int)(sentBits/8));
 
 #ifdef HAVEGTK
   if (gfp->gtkflag) {
     int j;
-    for ( ch = 0; ch < gfc->stereo; ch++ ) {
+    for ( ch = 0; ch < gfp->stereo; ch++ ) {
       for ( j = 0; j < FFTOFFSET; j++ )
-	pinfo->pcmdata[ch][j] = pinfo->pcmdata[ch][j+gfc->framesize];
+	pinfo->pcmdata[ch][j] = pinfo->pcmdata[ch][j+gfp->framesize];
       for ( j = FFTOFFSET; j < 1600; j++ ) {
 	pinfo->pcmdata[ch][j] = inbuf[ch][j-FFTOFFSET];
       }
     }
   }
 #endif
-  gfc->frameNum++;
+  gfp->frameNum++;
 
   return mp3count;
 }
 
+
+
+int fill_buffer_resample(lame_global_flags *gfp,short int *outbuf,int desired_len,
+        short int *inbuf,int len,int *num_used,int ch) {
+
+  static FLOAT8 itime[2];
+#define OLDBUFSIZE 5
+  static short int inbuf_old[2][OLDBUFSIZE];
+  static int init[2]={0,0};
+  int i,j=0,k,linear,value;
+
+  if (gfp->frameNum==0 && !init[ch]) {
+    init[ch]=1;
+    itime[ch]=0;
+    memset((char *) inbuf_old[ch], 0, sizeof(short int)*OLDBUFSIZE);
+  }
+  if (gfp->frameNum!=0) init[ch]=0; /* reset, for next time framenum=0 */
+
+
+  /* if downsampling by an integer multiple, use linear resampling,
+   * otherwise use quadratic */
+  linear = ( fabs(gfp->resample_ratio - floor(.5+gfp->resample_ratio)) < .0001 );
+
+  /* time of j'th element in inbuf = itime + j/ifreq; */
+  /* time of k'th element in outbuf   =  j/ofreq */
+  for (k=0;k<desired_len;k++) {
+    int y0,y1,y2,y3;
+    FLOAT8 x0,x1,x2,x3;
+    FLOAT8 time0;
+
+    time0 = k*gfp->resample_ratio;       /* time of k'th output sample */
+    j = floor( time0 -itime[ch]  );
+    /* itime[ch] + j;    */            /* time of j'th input sample */
+    if (j+2 >= len) break;             /* not enough data in input buffer */
+
+    x1 = time0-(itime[ch]+j);
+    x2 = x1-1;
+    y1 = (j<0) ? inbuf_old[ch][OLDBUFSIZE+j] : inbuf[j];
+    y2 = ((1+j)<0) ? inbuf_old[ch][OLDBUFSIZE+1+j] : inbuf[1+j];
+
+    /* linear resample */
+    if (linear) {
+      outbuf[k] = floor(.5 +  (y2*x1-y1*x2) );
+    } else {
+      /* quadratic */
+      x0 = x1+1;
+      x3 = x1-2;
+      y0 = ((j-1)<0) ? inbuf_old[ch][OLDBUFSIZE+(j-1)] : inbuf[j-1];
+      y3 = ((j+2)<0) ? inbuf_old[ch][OLDBUFSIZE+(j+2)] : inbuf[j+2];
+      value = floor(.5 +
+			-y0*x1*x2*x3/6 + y1*x0*x2*x3/2 - y2*x0*x1*x3/2 +y3*x0*x1*x2/6
+			);
+      if (value > 32767) outbuf[k]=32767;
+      else if (value < -32767) outbuf[k]=-32767;
+      else outbuf[k]=value;
+
+      /*
+      printf("k=%i  new=%i   [ %i %i %i %i ]\n",k,outbuf[k],
+	     y0,y1,y2,y3);
+      */
+    }
+  }
+
+
+  /* k = number of samples added to outbuf */
+  /* last k sample used data from j,j+1, or j+1 overflowed buffer */
+  /* remove num_used samples from inbuf: */
+  *num_used = Min(len,j+2);
+  itime[ch] += *num_used - k*gfp->resample_ratio;
+  for (i=0;i<OLDBUFSIZE;i++)
+    inbuf_old[ch][i]=inbuf[*num_used + i -OLDBUFSIZE];
+  return k;
+}
+
+
+
+
+int fill_buffer(lame_global_flags *gfp,short int *outbuf,int desired_len,short int *inbuf,int len) {
+  int j;
+  j=Min(desired_len,len);
+  memcpy( (char *) outbuf,(char *)inbuf,sizeof(short int)*j);
+  return j;
+}
 
 
 
@@ -908,26 +976,41 @@ int lame_encode_buffer(lame_global_flags *gfp,
    short int buffer_l[], short int buffer_r[],int nsamples,
    char *mp3buf, int mp3buf_size)
 {
+  static int frame_buffered=0;
   int mp3size=0,ret,i,ch,mf_needed;
-  lame_internal_flags *gfc=gfp->internal_flags;
-  short int *mfbuf[2];
+
   short int *in_buffer[2];
   in_buffer[0] = buffer_l;
   in_buffer[1] = buffer_r;
 
-  if (!gfc->lame_init_params_init) 
-    lame_init_params(gfp);
-
   /* some sanity checks */
   assert(ENCDELAY>=MDCTDELAY);
   assert(BLKSIZE-FFTOFFSET >= 0);
-  mf_needed = BLKSIZE+gfc->framesize-FFTOFFSET;
+  mf_needed = BLKSIZE+gfp->framesize-FFTOFFSET;
   assert(MFSIZE>=mf_needed);
 
-  mfbuf[0]=gfc->mfbuf[0];
-  mfbuf[1]=gfc->mfbuf[1];
+  /* The reason for
+   *       int mf_samples_to_encode = ENCDELAY + 288;
+   * ENCDELAY = internal encoder delay.  And then we have to add 288
+   * because of the 50% MDCT overlap.  A 576 MDCT granule decodes to
+   * 1152 samples.  To synthesize the 576 samples centered under this granule
+   * we need the previous granule for the first 288 samples (no problem), and
+   * the next granule for the next 288 samples (not possible if this is last
+   * granule).  So we need to pad with 288 samples to make sure we can
+   * encode the 576 samples we are interested in.
+   */
+  if (gfp->frameNum==0 && !frame_buffered) {
+    memset((char *) mfbuf, 0, sizeof(mfbuf));
+    frame_buffered=1;
+    mf_samples_to_encode = ENCDELAY+288;
+    mf_size=ENCDELAY-MDCTDELAY;  /* we pad input with this many 0's */
+  }
+  if (gfp->frameNum==1) {
+    /* reset, for the next time frameNum==0 */
+    frame_buffered=0;
+  }
 
-  if (gfp->num_channels==2  && gfc->stereo==1) {
+  if (gfp->num_channels==2  && gfp->stereo==1) {
     /* downsample to mono */
     for (i=0; i<nsamples; ++i) {
       in_buffer[0][i]=((int)in_buffer[0][i]+(int)in_buffer[1][i])/2;
@@ -939,28 +1022,27 @@ int lame_encode_buffer(lame_global_flags *gfp,
   while (nsamples > 0) {
     int n_in=0;
     int n_out=0;
-    /* copy in new samples into mfbuf, with filtering */
-    for (ch=0; ch<gfc->stereo; ch++) {
-      if (gfc->resample_ratio!=1)  {
-	n_out=fill_buffer_blackman(gfp,&mfbuf[ch][gfc->mf_size],gfc->framesize,
+    /* copy in new samples */
+    for (ch=0; ch<gfp->stereo; ch++) {
+      if (gfp->resample_ratio!=1)  {
+	n_out=fill_buffer_resample(gfp,&mfbuf[ch][mf_size],gfp->framesize,
 					  in_buffer[ch],nsamples,&n_in,ch);
       } else {
-	n_out=Min(gfc->framesize,nsamples);
+	n_out=fill_buffer(gfp,&mfbuf[ch][mf_size],gfp->framesize,in_buffer[ch],nsamples);
 	n_in = n_out;
-	memcpy( (char *) &mfbuf[ch][gfc->mf_size],(char *)in_buffer[ch],sizeof(short int)*n_out);
       }
       in_buffer[ch] += n_in;
     }
 
 
     nsamples -= n_in;
-    gfc->mf_size += n_out;
-    assert(gfc->mf_size<=MFSIZE);
-    gfc->mf_samples_to_encode += n_out;
+    mf_size += n_out;
+    assert(mf_size<=MFSIZE);
+    mf_samples_to_encode += n_out;
 
-    if (gfc->mf_size >= mf_needed) {
+    if (mf_size >= mf_needed) {
       /* encode the frame */
-      ret = lame_encode_frame(gfp,mfbuf[0],mfbuf[1],mp3buf,mp3buf_size);
+      ret = lame_encode_frame(gfp,mfbuf[0],mfbuf[1],mf_size,mp3buf,mp3buf_size);
       if (ret == -1) {
 	/* fatel error: mp3buffer was too small */
 	return -1;
@@ -969,11 +1051,11 @@ int lame_encode_buffer(lame_global_flags *gfp,
       mp3size += ret;
 
       /* shift out old samples */
-      gfc->mf_size -= gfc->framesize;
-      gfc->mf_samples_to_encode -= gfc->framesize;
-      for (ch=0; ch<gfc->stereo; ch++)
-	for (i=0; i<gfc->mf_size; i++)
-	  mfbuf[ch][i]=mfbuf[ch][i+gfc->framesize];
+      mf_size -= gfp->framesize;
+      mf_samples_to_encode -= gfp->framesize;
+      for (ch=0; ch<gfp->stereo; ch++)
+	for (i=0; i<mf_size; i++)
+	  mfbuf[ch][i]=mfbuf[ch][i+gfp->framesize];
     }
   }
   assert(nsamples==0);
@@ -986,32 +1068,26 @@ int lame_encode_buffer(lame_global_flags *gfp,
 int lame_encode_buffer_interleaved(lame_global_flags *gfp,
    short int buffer[], int nsamples, char *mp3buf, int mp3buf_size)
 {
+  static int frame_buffered=0;
   int mp3size=0,ret,i,ch,mf_needed;
-  lame_internal_flags *gfc=gfp->internal_flags;
-  short int *mfbuf[2];
-
-  if (!gfc->lame_init_params_init) return -3;
-
-  mfbuf[0]=gfc->mfbuf[0];
-  mfbuf[1]=gfc->mfbuf[1];
 
   /* some sanity checks */
   assert(ENCDELAY>=MDCTDELAY);
   assert(BLKSIZE-FFTOFFSET >= 0);
-  mf_needed = BLKSIZE+gfc->framesize-FFTOFFSET;
+  mf_needed = BLKSIZE+gfp->framesize-FFTOFFSET;
   assert(MFSIZE>=mf_needed);
 
   if (gfp->num_channels == 1) {
     return lame_encode_buffer(gfp,buffer, NULL ,nsamples,mp3buf,mp3buf_size);
   }
 
-  if (gfc->resample_ratio!=1)  {
+  if (gfp->resample_ratio!=1)  {
     short int *buffer_l;
     short int *buffer_r;
     buffer_l=malloc(sizeof(short int)*nsamples);
     buffer_r=malloc(sizeof(short int)*nsamples);
     if (buffer_l == NULL || buffer_r == NULL) {
-      return -2;
+      return -1;
     }
     for (i=0; i<nsamples; i++) {
       buffer_l[i]=buffer[2*i];
@@ -1024,7 +1100,18 @@ int lame_encode_buffer_interleaved(lame_global_flags *gfp,
   }
 
 
-  if (gfp->num_channels==2  && gfc->stereo==1) {
+  if (gfp->frameNum==0 && !frame_buffered) {
+    memset((char *) mfbuf, 0, sizeof(mfbuf));
+    frame_buffered=1;
+    mf_samples_to_encode = ENCDELAY+288;
+    mf_size=ENCDELAY-MDCTDELAY;  /* we pad input with this many 0's */
+  }
+  if (gfp->frameNum==1) {
+    /* reset, for the next time frameNum==0 */
+    frame_buffered=0;
+  }
+
+  if (gfp->num_channels==2  && gfp->stereo==1) {
     /* downsample to mono */
     for (i=0; i<nsamples; ++i) {
       buffer[2*i]=((int)buffer[2*i]+(int)buffer[2*i+1])/2;
@@ -1036,21 +1123,21 @@ int lame_encode_buffer_interleaved(lame_global_flags *gfp,
   while (nsamples > 0) {
     int n_out;
     /* copy in new samples */
-    n_out = Min(gfc->framesize,nsamples);
+    n_out = Min(gfp->framesize,nsamples);
     for (i=0; i<n_out; ++i) {
-      mfbuf[0][gfc->mf_size+i]=buffer[2*i];
-      mfbuf[1][gfc->mf_size+i]=buffer[2*i+1];
+      mfbuf[0][mf_size+i]=buffer[2*i];
+      mfbuf[1][mf_size+i]=buffer[2*i+1];
     }
     buffer += 2*n_out;
 
     nsamples -= n_out;
-    gfc->mf_size += n_out;
-    assert(gfc->mf_size<=MFSIZE);
-    gfc->mf_samples_to_encode += n_out;
+    mf_size += n_out;
+    assert(mf_size<=MFSIZE);
+    mf_samples_to_encode += n_out;
 
-    if (gfc->mf_size >= mf_needed) {
+    if (mf_size >= mf_needed) {
       /* encode the frame */
-      ret = lame_encode_frame(gfp,mfbuf[0],mfbuf[1],mp3buf,mp3buf_size);
+      ret = lame_encode_frame(gfp,mfbuf[0],mfbuf[1],mf_size,mp3buf,mp3buf_size);
       if (ret == -1) {
 	/* fatel error: mp3buffer was too small */
 	return -1;
@@ -1059,11 +1146,11 @@ int lame_encode_buffer_interleaved(lame_global_flags *gfp,
       mp3size += ret;
 
       /* shift out old samples */
-      gfc->mf_size -= gfc->framesize;
-      gfc->mf_samples_to_encode -= gfc->framesize;
-      for (ch=0; ch<gfc->stereo; ch++)
-	for (i=0; i<gfc->mf_size; i++)
-	  mfbuf[ch][i]=mfbuf[ch][i+gfc->framesize];
+      mf_size -= gfp->framesize;
+      mf_samples_to_encode -= gfp->framesize;
+      for (ch=0; ch<gfp->stereo; ch++)
+	for (i=0; i<mf_size; i++)
+	  mfbuf[ch][i]=mfbuf[ch][i+gfp->framesize];
     }
   }
   assert(nsamples==0);
@@ -1092,13 +1179,10 @@ int lame_encode_buffer_interleaved(lame_global_flags *gfp,
  */
 int lame_encode(lame_global_flags *gfp, short int in_buffer[2][1152],char *mp3buf,int size){
   int imp3,save;
-  lame_internal_flags *gfc=gfp->internal_flags;
-  if (!gfc->lame_init_params_init) return -3;
-
-  save = gfc->mf_samples_to_encode;
-  imp3= lame_encode_buffer(gfp,in_buffer[0],in_buffer[1],576*gfc->mode_gr,
+  save = mf_samples_to_encode;
+  imp3= lame_encode_buffer(gfp,in_buffer[0],in_buffer[1],576*gfp->mode_gr,
         mp3buf,size);
-  gfc->mf_samples_to_encode = save;
+  mf_samples_to_encode = save;
   return imp3;
 }
 
@@ -1106,9 +1190,8 @@ int lame_encode(lame_global_flags *gfp, short int in_buffer[2][1152],char *mp3bu
 
 
 /* initialize mp3 encoder */
-int lame_init(lame_global_flags *gfp)
+void lame_init(lame_global_flags *gfp)
 {
-  lame_internal_flags *gfc;
 
   /*
    *  Disable floating point exepctions
@@ -1188,13 +1271,50 @@ int lame_init(lame_global_flags *gfp)
 #endif /* ABORTFP && !__riscos__ */
 
 
-  if (NULL==(gfp->internal_flags = malloc(sizeof(lame_internal_flags))))
-    return -1;
-  
-  gfc=(lame_internal_flags *) gfp->internal_flags;
-
 
   /* Global flags.  set defaults here */
+  gfp->allow_diff_short=0;
+  gfp->ATHonly=0;
+  gfp->noATH=0;
+  gfp->bWriteVbrTag=1;
+  gfp->cwlimit=0;
+  gfp->disable_reservoir=0;
+  gfp->experimentalX = 0;
+  gfp->experimentalY = 0;
+  gfp->experimentalZ = 0;
+  gfp->frameNum=0;
+  gfp->gtkflag=0;
+  gfp->quality=5;
+  gfp->input_format=sf_unknown;
+
+  gfp->filter_type=0;
+  gfp->lowpassfreq=0;
+  gfp->highpassfreq=0;
+  gfp->lowpasswidth=-1;
+  gfp->highpasswidth=-1;
+  gfp->lowpass1=0;
+  gfp->lowpass2=0;
+  gfp->highpass1=0;
+  gfp->highpass2=0;
+  gfp->lowpass_band=32;
+  gfp->highpass_band=-1;
+
+  gfp->no_short_blocks=0;
+  gfp->resample_ratio=1;
+  gfp->padding_type=2;
+  gfp->padding=0;
+  gfp->swapbytes=0;
+  gfp->silent=0;
+  gfp->totalframes=0;
+  gfp->VBR=0;
+  gfp->VBR_q=4;
+  gfp->VBR_min_bitrate_kbps=0;
+  gfp->VBR_max_bitrate_kbps=0;
+  gfp->VBR_min_bitrate=1;
+  gfp->VBR_max_bitrate=13;
+
+
+  gfp->version = 1;   /* =1   Default: MPEG-1 */
   gfp->mode = MPG_MD_JOINT_STEREO;
   gfp->force_ms=0;
   gfp->brate=0;
@@ -1208,70 +1328,10 @@ int lame_init(lame_global_flags *gfp)
   gfp->num_channels=2;
   gfp->num_samples=MAX_U_32_NUM;
 
-  gfp->allow_diff_short=0;
-  gfp->ATHonly=0;
-  gfp->noATH=0;
-  gfp->bWriteVbrTag=1;
-  gfp->cwlimit=0;
-  gfp->disable_reservoir=0;
-  gfp->experimentalX = 0;
-  gfp->experimentalY = 0;
-  gfp->experimentalZ = 0;
-  gfp->gtkflag=0;
-  gfp->quality=5;
-  gfp->input_format=sf_unknown;
-
-  gfp->lowpassfreq=0;
-  gfp->highpassfreq=0;
-  gfp->lowpasswidth=-1;
-  gfp->highpasswidth=-1;
-
-  gfp->no_short_blocks=0;
-  gfp->padding_type=2;
-  gfp->swapbytes=0;
-  gfp->silent=0;
-  gfp->VBR=0;
-  gfp->VBR_q=4;
-  gfp->VBR_min_bitrate_kbps=0;
-  gfp->VBR_max_bitrate_kbps=0;
-
   gfp->inPath=NULL;
   gfp->outPath=NULL;
-
-  gfc->lame_init_params_init=0;
-  gfc->lame_encode_frame_init=0;
-  gfc->iteration_init_init=0;
-  gfc->fill_buffer_blackman_init=0;
-  gfc->mdct_sub48_init=0;
-
-  gfc->frameNum=0;
-  gfc->filter_type=0;
-
-  gfc->resample_ratio=1;
-  gfc->lowpass1=0;
-  gfc->lowpass2=0;
-  gfc->highpass1=0;
-  gfc->highpass2=0;
-  gfc->lowpass_band=32;
-  gfc->highpass_band=-1;
-
-  gfc->padding=0;
-  gfc->totalframes=0;
-  gfc->VBR_min_bitrate=1;
-  gfc->VBR_max_bitrate=13;
-
-  gfc->version = 1;   /* =1   Default: MPEG-1 */
-
-  gfc->ms_ener_ratio[0]=0;
-  gfc->ms_ener_ratio[1]=0;
-  gfc->ms_ratio[0]=0;
-  gfc->ms_ratio[1]=0;
-  gfc->OldValue[0]=180;
-  gfc->OldValue[1]=180;
-  gfc->CurrentStep=4;
-
   id3tag.used=0;
-  return 0;
+
 }
 
 
@@ -1283,12 +1343,10 @@ int lame_encode_finish(lame_global_flags *gfp,char *mp3buffer, int mp3buffer_siz
 {
   int imp3,mp3count,mp3buffer_size_remaining;
   short int buffer[2][1152];
-  lame_internal_flags *gfc=gfp->internal_flags;
-
   memset((char *)buffer,0,sizeof(buffer));
   mp3count = 0;
 
-  while (gfc->mf_samples_to_encode > 0) {
+  while (mf_samples_to_encode > 0) {
 
     mp3buffer_size_remaining = mp3buffer_size - mp3count;
     /* if user specifed buffer size = 0, dont check size */
@@ -1297,18 +1355,18 @@ int lame_encode_finish(lame_global_flags *gfp,char *mp3buffer, int mp3buffer_siz
 
     if (imp3 == -1) {
       /* fatel error: mp3buffer too small */
-      desalloc_buffer(&gfc->bs);    /* Deallocate all buffers */
+      desalloc_buffer(&bs);    /* Deallocate all buffers */
       return -1;
     }
     mp3buffer += imp3;
     mp3count += imp3;
-    gfc->mf_samples_to_encode -= gfc->framesize;
+    mf_samples_to_encode -= gfp->framesize;
   }
 
 
-  gfc->frameNum--;
+  gfp->frameNum--;
   if (!gfp->gtkflag && !gfp->silent) {
-      timestatus(gfp->out_samplerate,gfc->frameNum,gfc->totalframes,gfc->framesize);
+      timestatus(gfp->out_samplerate,gfp->frameNum,gfp->totalframes,gfp->framesize);
 #ifdef BRHIST
       if (disp_brhist)
 	{
@@ -1327,15 +1385,15 @@ int lame_encode_finish(lame_global_flags *gfp,char *mp3buffer, int mp3buffer_siz
   /* if user specifed buffer size = 0, dont check size */
   if (mp3buffer_size == 0) mp3buffer_size_remaining=0;  
 
-  imp3= copy_buffer(mp3buffer,mp3buffer_size_remaining,&gfc->bs);
+  imp3= copy_buffer(mp3buffer,mp3buffer_size_remaining,&bs);
   if (imp3 == -1) {
     /* fatel error: mp3buffer too small */
-    desalloc_buffer(&gfc->bs);    /* Deallocate all buffers */
+    desalloc_buffer(&bs);    /* Deallocate all buffers */
     return -1;
   }
 
   mp3count += imp3;
-  desalloc_buffer(&gfc->bs);    /* Deallocate all buffers */
+  desalloc_buffer(&bs);    /* Deallocate all buffers */
   return mp3count;
 }
 
@@ -1345,15 +1403,13 @@ int lame_encode_finish(lame_global_flags *gfp,char *mp3buffer, int mp3buffer_siz
 /*****************************************************************/
 void lame_mp3_tags(lame_global_flags *gfp)
 {
-  lame_internal_flags *gfc=gfp->internal_flags;
-
   if (gfp->bWriteVbrTag)
     {
       /* Calculate relative quality of VBR stream
        * 0=best, 100=worst */
       int nQuality=gfp->VBR_q*100/9;
       /* Write Xing header again */
-      PutVbrTag(gfp->outPath,nQuality,1-gfc->version);
+      PutVbrTag(gfp->outPath,nQuality,1-gfp->version);
     }
 
 
