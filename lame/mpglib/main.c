@@ -4,7 +4,6 @@
 #ifdef OS_AMIGAOS
 #include "/lame.h"
 #include "/util.h"
-#include "/VbrTag.h"
 #else
 #include "../lame.h"
 #include "../util.h"

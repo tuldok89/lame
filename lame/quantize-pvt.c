@@ -1037,3 +1037,8 @@ bin_search_StepSize2(int      desired_rate,
     return nBits;
 }
 
+
+
+
+
+
