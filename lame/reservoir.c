@@ -19,7 +19,7 @@
 #ifdef HAVEGTK
 #include "gtkanal.h"
 #endif
-#include "lame.h"
+
 
 /*
   Layer3 bit reservoir:

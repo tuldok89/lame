@@ -505,7 +505,6 @@ int default_channels)
   num_samples=MAX_U_32_NUM;
   samp_freq=default_samp;
   num_channels = default_channels;
-
   
   if (!strcmp(inPath, "-")) {
     /* Read from standard input. */

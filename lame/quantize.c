@@ -74,7 +74,7 @@ set_pinfo (
 	pinfo->xfsf_s[gr][ch][3*sfb+i] =  xfsf[i+1][sfb]*en0;
 	pinfo->thr_s[gr][ch][3*sfb+i] = ratio->thm.s[sfb][i];
 	pinfo->en_s[gr][ch][3*sfb+i] = ratio->en.s[sfb][i]; 
-
+	
 	pinfo->LAMEsfb_s[gr][ch][3*sfb+i]=
 	  -2*cod_info->subblock_gain[i]-ifqstep*scalefac->s[sfb][i];
       }
@@ -169,7 +169,6 @@ iteration_loop( lame_global_flags *gfp,
 	   */
           memset(&scalefac[gr][ch],0,sizeof(III_scalefac_t));
           memset(l3_enc[gr][ch],0,576*sizeof(int));
-	  memset(xfsf,0,sizeof(xfsf));
 	  noise[0]=noise[1]=noise[2]=noise[3]=0;
         }
       else
@@ -180,7 +179,7 @@ iteration_loop( lame_global_flags *gfp,
 		      &scalefac[gr][ch], cod_info, xfsf, ch);
         }
       best_scalefac_store(gfp,gr, ch, l3_enc, l3_side, scalefac);
-      if (gfp->use_best_huffman==1 && cod_info->block_type == SHORT_TYPE) {
+      if (gfp->use_best_huffman==1 && cod_info->block_type == NORM_TYPE) {
 	best_huffman_divide(gr, ch, cod_info, l3_enc[gr][ch]);
       }
 #ifdef HAVEGTK
@@ -602,7 +601,7 @@ VBR_iteration_loop (lame_global_flags *gfp,
     for (ch = 0; ch < gfp->stereo; ch++) {
       cod_info = &l3_side->gr[gr].ch[ch].tt;
       best_scalefac_store(gfp,gr, ch, l3_enc, l3_side, scalefac);
-      if (cod_info->block_type != SHORT_TYPE) {
+      if (cod_info->block_type == NORM_TYPE) {
 	best_huffman_divide(gr, ch, cod_info, l3_enc[gr][ch]);
       }
 #ifdef HAVEGTK
