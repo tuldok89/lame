@@ -33,7 +33,6 @@ LN_SWITCHES = $(LN_OPTS)
 c_sources = \
  main.c \
  brhist.c \
- bitstream.c \
  formatBitstream.c \
  fft.c \
  get_audio.c \
@@ -48,6 +47,7 @@ c_sources = \
  quantize.c \
  quantize-pvt.c \
  vbrquantize.c \
+ loopold.c \
  reservoir.c \
  tables.c \
  takehiro.c \
