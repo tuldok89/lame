@@ -115,6 +115,8 @@ static FLOAT8 enwindow[] =
    4.756451e-03,   2.1458e-05,  -6.9618e-05,    2.384e-06
 };
 
+static FLOAT8 sb_sample[2][2][18][SBLIMIT];
+static FLOAT8 mm[16][SBLIMIT - 1];
 
 #define NS 12
 #define NL 36
@@ -141,9 +143,8 @@ static FLOAT8 win[4][36];
 *
 ************************************************************************/
 
-static void window_subband(lame_global_flags *gfp,short *xk, FLOAT8 d[SBLIMIT], FLOAT8 *in)
+static void window_subband(short *xk, FLOAT8 d[SBLIMIT], FLOAT8 *in)
 {
-    lame_internal_flags *gfc=gfp->internal_flags;
     int i;
     FLOAT8 s, t, *wp;
     wp = enwindow;
@@ -199,7 +200,7 @@ static void window_subband(lame_global_flags *gfp,short *xk, FLOAT8 d[SBLIMIT], 
     }
 
     in++;
-    wp = &gfc->mm[0][0];
+    wp = &mm[0][0];
     for (i = 15; i >= 0; --i) {
 	int j;
 	FLOAT8 s0 = s; /* mm[i][0] is always 1 */
@@ -331,28 +332,25 @@ void mdct_sub48(lame_global_flags *gfp,
     int gr, k, ch;
     short *wk;
     static int init = 0;
-    lame_internal_flags *gfc=gfp->internal_flags;
 
-
-    if ( gfc->mdct_sub48_init == 0 ) {
-        void mdct_init48(lame_global_flags *gfp);
-        gfc->mdct_sub48_init=1;
-	mdct_init48(gfp);
+    if ( init == 0 ) {
+        void mdct_init48(void);
+	mdct_init48();
 	init++;
     }
 
     wk = w0;
     /* thinking cache performance, ch->gr loop is better than gr->ch loop */
-    for (ch = 0; ch < gfc->stereo; ch++) {
-	for (gr = 0; gr < gfc->mode_gr; gr++) {
+    for (ch = 0; ch < gfp->stereo; ch++) {
+	for (gr = 0; gr < gfp->mode_gr; gr++) {
 	    int	band;
 	    FLOAT8 *mdct_enc = mdct_freq[gr][ch];
 	    gr_info *gi = &(l3_side->gr[gr].ch[ch].tt);
-	    FLOAT8 *samp = gfc->sb_sample[ch][1 - gr][0];
+	    FLOAT8 *samp = sb_sample[ch][1 - gr][0];
 
 	    for (k = 0; k < 18 / 2; k++) {
-		window_subband(gfp,wk, samp, work);
-		window_subband(gfp,wk + 32, samp + 32, work);
+		window_subband(wk, samp, work);
+		window_subband(wk + 32, samp + 32, work);
 		/*
 		 * Compensate for inversion in the analysis filter
 		 */
@@ -364,21 +362,21 @@ void mdct_sub48(lame_global_flags *gfp,
 
 
 	    /* apply filters on the polyphase filterbank outputs */
-	    /* bands <= gfc->highpass_band will be zeroed out below */
-	    /* bands >= gfc->lowpass_band  will be zeroed out below */
-	    if (gfc->filter_type==0) {
+	    /* bands <= gfp->highpass_band will be zeroed out below */
+	    /* bands >= gfp->lowpass_band  will be zeroed out below */
+	    if (gfp->filter_type==0) {
 	      FLOAT8 amp,freq;
-	      for (band=gfc->highpass_band+1;  band < gfc->lowpass_band ; band++) { 
+	      for (band=gfp->highpass_band+1;  band < gfp->lowpass_band ; band++) { 
 		freq = band/31.0;
-		if (gfc->lowpass1 < freq && freq < gfc->lowpass2) {
-		  amp = cos((PI/2)*(gfc->lowpass1-freq)/(gfc->lowpass2-gfc->lowpass1));
+		if (gfp->lowpass1 < freq && freq < gfp->lowpass2) {
+		  amp = cos((PI/2)*(gfp->lowpass1-freq)/(gfp->lowpass2-gfp->lowpass1));
 		  for (k=0; k<18; k++) 
-		    gfc->sb_sample[ch][1-gr][k][band]*=amp;
+		    sb_sample[ch][1-gr][k][band]*=amp;
 		}
-		if (gfc->highpass1 < freq && freq < gfc->highpass2) {
-		  amp = cos((PI/2)*(gfc->highpass2-freq)/(gfc->highpass2-gfc->highpass1));
+		if (gfp->highpass1 < freq && freq < gfp->highpass2) {
+		  amp = cos((PI/2)*(gfp->highpass2-freq)/(gfp->highpass2-gfp->highpass1));
 		  for (k=0; k<18; k++) 
-		    gfc->sb_sample[ch][1-gr][k][band]*=amp;
+		    sb_sample[ch][1-gr][k][band]*=amp;
 		}
 	      }
 	    }
@@ -396,43 +394,43 @@ void mdct_sub48(lame_global_flags *gfp,
 		if (gi->mixed_block_flag && band < 2)
 		    type = 0;
 #endif
-		if (band >= gfc->lowpass_band || band <= gfc->highpass_band) {
+		if (band >= gfp->lowpass_band || band <= gfp->highpass_band) {
 		    memset((char *)mdct_enc,0,18*sizeof(FLOAT8));
 		}else {
 		  if (type == SHORT_TYPE) {
 		    for (k = 2; k >= 0; --k) {
 		      FLOAT8 w1 = win[SHORT_TYPE][k];
 		      work[k] =
-			gfc->sb_sample[ch][gr][k+6][band] * w1 -
-			gfc->sb_sample[ch][gr][11-k][band];
+			sb_sample[ch][gr][k+6][band] * w1 -
+			sb_sample[ch][gr][11-k][band];
 		      work[k+3] =
-			gfc->sb_sample[ch][gr][k+12][band] +
-			gfc->sb_sample[ch][gr][17-k][band] * w1;
+			sb_sample[ch][gr][k+12][band] +
+			sb_sample[ch][gr][17-k][band] * w1;
 		      
 		      work[k+6] =
-			gfc->sb_sample[ch][gr][k+12][band] * w1 -
-			gfc->sb_sample[ch][gr][17-k][band];
+			sb_sample[ch][gr][k+12][band] * w1 -
+			sb_sample[ch][gr][17-k][band];
 		      work[k+9] =
-			gfc->sb_sample[ch][1-gr][k][band] +
-			gfc->sb_sample[ch][1-gr][5-k][band] * w1;
+			sb_sample[ch][1-gr][k][band] +
+			sb_sample[ch][1-gr][5-k][band] * w1;
 		      
 		      work[k+12] =
-			gfc->sb_sample[ch][1-gr][k][band] * w1 -
-			gfc->sb_sample[ch][1-gr][5-k][band];
+			sb_sample[ch][1-gr][k][band] * w1 -
+			sb_sample[ch][1-gr][5-k][band];
 		      work[k+15] =
-			gfc->sb_sample[ch][1-gr][k+6][band] +
-			gfc->sb_sample[ch][1-gr][11-k][band] * w1;
+			sb_sample[ch][1-gr][k+6][band] +
+			sb_sample[ch][1-gr][11-k][band] * w1;
 		    }
 		    mdct_short(mdct_enc, work);
 		  } else {
 		    for (k = 8; k >= 0; --k) {
 		      work[k] =
-			win[type][k  ] * gfc->sb_sample[ch][gr][k   ][band]
-			- win[type][k+9] * gfc->sb_sample[ch][gr][17-k][band];
+			win[type][k  ] * sb_sample[ch][gr][k   ][band]
+			- win[type][k+9] * sb_sample[ch][gr][17-k][band];
 		      
 		      work[9+k] =
-			win[type][k+18] * gfc->sb_sample[ch][1-gr][k   ][band]
-			+ win[type][k+27] * gfc->sb_sample[ch][1-gr][17-k][band];
+			win[type][k+18] * sb_sample[ch][1-gr][k   ][band]
+			+ win[type][k+27] * sb_sample[ch][1-gr][17-k][band];
 		    }
 		    mdct_long(mdct_enc, work);
 		  }
@@ -457,17 +455,16 @@ void mdct_sub48(lame_global_flags *gfp,
 	      }
 	}
 	wk = w1;
-	if (gfc->mode_gr == 1) {
-	    memcpy(gfc->sb_sample[ch][0], gfc->sb_sample[ch][1], 576 * sizeof(FLOAT8));
+	if (gfp->mode_gr == 1) {
+	    memcpy(sb_sample[ch][0], sb_sample[ch][1], 576 * sizeof(FLOAT8));
 	}
     }
 }
 
 
 
-void mdct_init48(lame_global_flags *gfp)
+void mdct_init48(void)
 {
-    lame_internal_flags *gfc=gfp->internal_flags;
     int i, k, m;
     FLOAT8 sq;
     FLOAT8 max;
@@ -575,7 +572,7 @@ void mdct_init48(lame_global_flags *gfp)
 	    }
 	}
 
-	wp = &gfc->mm[0][0];
+	wp = &mm[0][0];
 	for (i = 15; i >= 0; --i) {
 	    for (k = 1; k < 32; k++) {
 		*wp++ = cos((2 * i + 1) * k * PI/64) * mmax[k - 1];

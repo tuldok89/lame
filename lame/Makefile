@@ -89,21 +89,19 @@ ifeq ($(UNAME),Linux)
 
 
 
-# The following features are experimental code: 
-# I would recommend them, but they are *not* part of official LAME.
-# (RH 2000-03-31)
-#                                                       Robert.Hegemann@gmx.de
-#-----------------------------------------------------------------------------
+# The following features are experimental code, 
+# so don't use them if you don't know exactly what you do! (RH 2000-01-30)
 #   FEATURES  = -DRH_QUALITY_CONTROL  # tuned VBR quality control
 #   FEATURES += -DRH_SIDE_VBR         # turns side channel reduction off (VBR)
-#
+#   FEATURES += -DRH_SIDE_CBR         # turns side channel reduction off (CBR)
+#   FEATURES += -DRH_ATH              # max noise instead of average noise
 # these options for gcc-2.95.2 to produce fast code
 #   CC_OPTS = $(FEATURES)\
 #	-Wall -O9 -fomit-frame-pointer -march=pentium \
 #	-finline-functions -fexpensive-optimizations \
+#	-ffast-math -malign-double -mfancy-math-387 \
 #	-funroll-loops -funroll-all-loops -pipe -fschedule-insns2 \
-#	-fno-strength-reduce \
-#	-malign-double -mfancy-math-387 -ffast-math 
+#	-fno-strength-reduce 
 
 
 ##########################################################################
@@ -237,7 +235,6 @@ endif
 CC_SWITCHES = -DNDEBUG -D__NO_MATH_INLINES $(CC_OPTS) $(SNDLIB) $(GTK) $(BRHIST_SWITCH)
 c_sources = \
         brhist.c \
-	bitstream.c \
 	formatBitstream.c \
 	fft.c \
 	get_audio.c \
